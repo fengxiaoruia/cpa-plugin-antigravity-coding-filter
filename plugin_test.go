@@ -457,3 +457,32 @@ func mustUnmarshalJSON(t *testing.T, raw []byte, out any) {
 		t.Fatalf("unmarshal %s: %v", raw, err)
 	}
 }
+func TestHandlePluginCallRequestInterceptAfterRewritesCodingSignals(t *testing.T) {
+	defer restoreDefaultFilterConfig(t)
+	applyFilterConfig(filterConfig{Mode: filterModeRewrite, UseDefaultKeywords: true})
+
+	request := requestInterceptRequestJSON(t, `{"system":"You are Codex.","messages":[]}`)
+
+	raw, code := handlePluginCall("request.intercept_after", request)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; body=%s", code, raw)
+	}
+
+	var envelope struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Body string `json:"Body"`
+		} `json:"result"`
+	}
+	mustUnmarshalJSON(t, raw, &envelope)
+	if !envelope.OK {
+		t.Fatalf("ok = false, want true")
+	}
+	body, err := base64.StdEncoding.DecodeString(envelope.Result.Body)
+	if err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if !strings.Contains(string(body), "You are Antigravity.") {
+		t.Fatalf("body = %s, want rewritten system", body)
+	}
+}

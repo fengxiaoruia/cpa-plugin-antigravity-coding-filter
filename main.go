@@ -137,7 +137,7 @@ func handlePluginCall(method string, request []byte) ([]byte, int) {
 	case pluginabi.MethodRequestInterceptBefore:
 		return handleRequestInterceptBefore(request), 0
 	case pluginabi.MethodRequestInterceptAfter:
-		return mustEnvelope(pluginapi.RequestInterceptResponse{}), 0
+		return handleRequestInterceptAfter(request), 0
 	default:
 		return mustErrorEnvelope("unknown_method", fmt.Sprintf("unknown method %q", method)), 0
 	}
@@ -266,9 +266,17 @@ func jsonHeaders() http.Header {
 }
 
 func handleRequestInterceptBefore(request []byte) []byte {
+	return handleRequestIntercept(request, "request.intercept_before")
+}
+
+func handleRequestInterceptAfter(request []byte) []byte {
+	return handleRequestIntercept(request, "request.intercept_after")
+}
+
+func handleRequestIntercept(request []byte, method string) []byte {
 	var req pluginapi.RequestInterceptRequest
 	if err := json.Unmarshal(request, &req); err != nil {
-		return mustErrorEnvelope("invalid_request", fmt.Sprintf("decode request.intercept_before request: %v", err))
+		return mustErrorEnvelope("invalid_request", fmt.Sprintf("decode %s request: %v", method, err))
 	}
 	cfg := activeFilterConfig()
 	if cfg.Mode != filterModeRewrite {
@@ -320,6 +328,9 @@ var defaultRewriteMappings = []rewriteMapping{
 	{Match: "OpenAI Codex", Replacement: "Antigravity"},
 	{Match: "Codex CLI", Replacement: "Antigravity"},
 	{Match: "Codex", Replacement: "Antigravity"},
+	{Match: "GPT-5.4", Replacement: "Gemini"},
+	{Match: "GPT-5", Replacement: "Gemini"},
+	{Match: "OpenAI", Replacement: "Google"},
 	{Match: "OpenCode", Replacement: "Antigravity"},
 	{Match: "GitHub Copilot CLI", Replacement: "Antigravity"},
 	{Match: "GitHub Copilot", Replacement: "Antigravity"},
@@ -574,6 +585,25 @@ func classifyRequest(body []byte) filterDecision {
 	return classifyRequestWithConfig(body, activeFilterConfig())
 }
 
+func isPromptInstruction(path []string, value any) bool {
+	if len(path) > 0 {
+		key := strings.ToLower(path[len(path)-1])
+		switch key {
+		case "system", "instructions", "system_instruction", "systeminstruction":
+			return true
+		}
+	}
+	if m, ok := value.(map[string]any); ok {
+		if role, ok := m["role"].(string); ok {
+			role = strings.ToLower(strings.TrimSpace(role))
+			if role == "system" || role == "developer" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func classifyRequestWithConfig(body []byte, cfg filterConfig) filterDecision {
 	var root any
 	if err := json.Unmarshal(body, &root); err != nil {
@@ -583,7 +613,7 @@ func classifyRequestWithConfig(body []byte, cfg filterConfig) filterDecision {
 	mappings := effectiveMappings(cfg)
 	var decision filterDecision
 	walkJSON(root, func(path []string, value any) bool {
-		if len(path) == 0 || path[len(path)-1] != "system" {
+		if !isPromptInstruction(path, value) {
 			return true
 		}
 		text := strings.ToLower(collectText(value))
@@ -621,9 +651,17 @@ func rewriteRequestBodyWithConfig(body []byte, cfg filterConfig) ([]byte, bool) 
 func rewriteSystemFields(value any, mappings []rewriteMapping) (any, bool) {
 	switch typed := value.(type) {
 	case map[string]any:
+		if role, ok := typed["role"].(string); ok {
+			role = strings.ToLower(strings.TrimSpace(role))
+			if role == "system" || role == "developer" {
+				return rewriteSystemValue(typed, mappings)
+			}
+		}
+
 		changed := false
 		for key, child := range typed {
-			if key == "system" {
+			lowerKey := strings.ToLower(key)
+			if lowerKey == "system" || lowerKey == "instructions" || lowerKey == "system_instruction" || lowerKey == "systeminstruction" {
 				next, childChanged := rewriteSystemValue(child, mappings)
 				if childChanged {
 					typed[key] = next

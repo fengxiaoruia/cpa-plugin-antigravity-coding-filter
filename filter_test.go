@@ -54,7 +54,7 @@ func TestBuiltInKeywordPresetCoversMainstreamCodingToolsAndAgents(t *testing.T) 
 				t.Fatalf("%q was not detected by built-in preset", keyword)
 			}
 			got, rewritten := rewriteRequestBody([]byte(`{"system":"You are ` + keyword + `."}`))
-			if !rewritten || !strings.Contains(string(got), "You are Antigravity.") {
+			if !rewritten || !strings.Contains(string(got), "You are " + mapping.Replacement + ".") {
 				t.Fatalf("%q rewrite = %s, changed=%v", keyword, got, rewritten)
 			}
 		})
@@ -154,4 +154,50 @@ func containsSystemText(t *testing.T, body []byte, want string) bool {
 		return !found
 	})
 	return found
+}
+
+func TestRewriteRequestSupportsDeveloperRoleAndInstructionsAndGemini(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "developer role in messages",
+			body: `{"messages":[{"role":"developer","content":"You are Codex."},{"role":"user","content":"Hi"}]}`,
+			want: "You are Antigravity.",
+		},
+		{
+			name: "developer role in responses input",
+			body: `{"input":[{"role":"developer","content":"You are OpenAI Codex."}]}`,
+			want: "You are Antigravity.",
+		},
+		{
+			name: "instructions field",
+			body: `{"instructions":"Run Codex CLI."}`,
+			want: "Run Antigravity.",
+		},
+		{
+			name: "gemini system_instruction",
+			body: `{"system_instruction":{"parts":[{"text":"You are Codex agent."}]}}`,
+			want: "You are Antigravity agent.",
+		},
+		{
+			name: "gemini systemInstruction camelCase",
+			body: `{"systemInstruction":{"parts":[{"text":"You are Codex agent."}]}}`,
+			want: "You are Antigravity agent.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, rewritten := rewriteRequestBody([]byte(tt.body))
+			if !rewritten {
+				t.Fatalf("rewritten = false, want true")
+			}
+			if !strings.Contains(string(got), tt.want) {
+				t.Fatalf("rewritten body = %s, want to contain %q", got, tt.want)
+			}
+		})
+	}
 }
